@@ -1,15 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
+    <meta charset="UTF-8">
+    <title>后厨看板</title>
+    
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
     
     <script src="./assets/js/config.js"></script>
+
+    <style>
+        body { background: #222; color: #eee; font-family: sans-serif; padding: 20px; }
+        .order-card { 
+            background: #333; 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin-bottom: 20px; 
+            border-left: 8px solid #ff9800; 
+            animation: slideIn 0.5s ease-out;
+        }
+        @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .order-header { display: flex; justify-content: space-between; margin-bottom: 15px; color: #aaa; font-size: 14px;}
+        .dish-row { font-size: 24px; font-weight: bold; margin-bottom: 8px; display: flex; justify-content: space-between; border-bottom: 1px dashed #444; padding-bottom: 8px;}
+        .dish-count { color: #ff9800; }
+        .btn-done { width: 100%; background: #28a745; color: white; border: none; padding: 15px; font-size: 20px; border-radius: 5px; cursor: pointer; margin-top: 10px;}
+        .empty-state { text-align: center; color: #555; margin-top: 50px; font-size: 20px; }
+    </style>
 </head>
 <body>
-   <script>
-       const { createApp } = Vue
-       createApp({
-           // 直接使用 _supabase
-           // ...
-       }).mount('#app')
-   </script>
+    <div id="app">
+        <h1>👨‍🍳 待制作订单 ({{ orders.length }})</h1>
+        
+        <div v-if="orders.length === 0" class="empty-state">
+            暂无新订单...
+        </div>
+
+        <div class="order-card" v-for="order in orders" :key="order.id">
+            <div class="order-header">
+                <span>单号: #{{ order.id }}</span>
+                <span>{{ formatTime(order.created_at) }}</span>
+            </div>
+            
+            <div class="dish-row" v-for="item in order.content">
+                <span>{{ item.name }}</span>
+                <span class="dish-count">x {{ item.count }}</span>
+            </div>
+
+            <button class="btn-done" @click="finishOrder(order.id)">✅ 出餐完成</button>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue
+
+        createApp({
+            data() {
+                return {
+                    orders: []
+                }
+            },
+            async mounted() {
+                await this.fetchOrders()
+                this.subscribeRealtime()
+            },
+            methods: {
+                formatTime(isoString) {
+                    const date = new Date(isoString)
+                    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+                },
+
+                // 1. 获取现有订单
+                async fetchOrders() {
+                    const { data, error } = await _supabase
+                        .from('orders')
+                        .select('*')
+                        .eq('status', 'pending')
+                        .order('created_at', { ascending: false })
+                    
+                    if (data) this.orders = data
+                    if (error) console.error('获取失败:', error)
+                },
+
+                // 2. 开启实时监听 (有人下单立刻弹出来)
+                subscribeRealtime() {
+                    _supabase
+                        .channel('kitchen-orders')
+                        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, payload => {
+                            // 新订单插入到最前面
+                            this.orders.unshift(payload.new)
+                        })
+                        .subscribe()
+                },
+
+                // 3. 完成订单
+                async finishOrder(id) {
+                    // 乐观更新：先从界面移除
+                    const index = this.orders.findIndex(o => o.id === id)
+                    if (index > -1) this.orders.splice(index, 1)
+
+                    // 后台更新数据库
+                    await _supabase.from('orders').update({ status: 'done' }).eq('id', id)
+                }
+            }
+        }).mount('#app')
+    </script>
 </body>
+</html>
